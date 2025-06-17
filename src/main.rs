@@ -1,3 +1,6 @@
+mod commands;
+mod utils;
+
 use std::env::var;
 
 use serenity::all::{ClientBuilder, GatewayIntents};
@@ -27,7 +30,7 @@ async fn main() {
     // TODO: load a config file and provide a setup wizard if launched for the first time
 
     let opt = poise::FrameworkOptions {
-        commands: vec![],
+        commands: vec![commands::test()],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
             ..Default::default()
@@ -40,7 +43,7 @@ async fn main() {
         },
         post_command: |ctx| {
             Box::pin(async move {
-                println!("FINISHED COMMAND: {}", ctx.command().qualified_name);
+                info!("FINISHED COMMAND: {}", ctx.command().qualified_name);
             })
         },
         command_check: Some(|ctx| {
@@ -54,7 +57,7 @@ async fn main() {
         }),
         event_handler: |_ctx, event, _framework, _data| {
             Box::pin(async move {
-                println!("EVENT RECEIVED: {:?}", event.snake_case_name());
+                info!("EVENT RECEIVED: {:?}", event.snake_case_name());
                 Ok(())
             })
         },
