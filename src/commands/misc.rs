@@ -1,10 +1,12 @@
 use chrono::{DateTime, Utc};
 use chrono_tz::Tz;
 use poise::CreateReply;
+use reqwest::Client;
+use serde_json::Value;
 
 use crate::{
     Context, Error,
-    utils::bot::{self, error_text, is_admin},
+    utils::bot::{self, error_and_return, error_text, is_admin},
 };
 
 #[poise::command(slash_command)]
@@ -103,6 +105,72 @@ pub async fn reload_settings(
             .ephemeral(ephemeral),
     )
     .await?;
+
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+pub async fn print(
+    ctx: Context<'_>,
+    print: String,
+    #[description = "Auto Delete"] auto_delete: Option<bool>,
+    #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
+) -> Result<(), Error> {
+    let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
+    let auto_delete = auto_delete.unwrap_or(false);
+
+    let hide = ctx
+        .send(CreateReply::default().content(".").ephemeral(true))
+        .await?;
+    let msg = ctx
+        .send(CreateReply::default().content(print).ephemeral(ephemeral))
+        .await?;
+    hide.delete(ctx).await?;
+    if auto_delete {
+        msg.delete(ctx).await?;
+    }
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+pub async fn translate(
+    ctx: Context<'_>,
+    #[description = "Text to translate"] text: String,
+    #[description = "Language code (e.g., 'en', 'fr')"] lang: Option<String>,
+    #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
+) -> Result<(), Error> {
+    let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
+
+    let url = format!(
+        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={}&dt=t&q={}",
+        lang.unwrap_or("en".to_string()),
+        urlencoding::encode(&text)
+    );
+
+    let client = Client::new();
+    let res = match client.get(&url).send().await {
+        Ok(res) => res,
+        Err(e) => {
+            return error_and_return(&ctx, ephemeral, e).await;
+        }
+    };
+    let res: Value = match res.json().await {
+        Ok(res) => res,
+        Err(e) => {
+            return error_and_return(&ctx, ephemeral, e).await;
+        }
+    };
+
+    if let Some(translated) = res[0][0][0].as_str() {
+        ctx.send(
+            CreateReply::default()
+                .ephemeral(ephemeral)
+                .content(translated),
+        )
+        .await?;
+    } else {
+        error_text(&ctx, ephemeral, "Empty Answer").await;
+    }
 
     Ok(())
 }
