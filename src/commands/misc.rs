@@ -1,6 +1,9 @@
 use poise::CreateReply;
 
-use crate::{Context, Error, utils::bot};
+use crate::{
+    Context, Error,
+    utils::bot::{self},
+};
 
 #[poise::command(slash_command)]
 pub async fn test(

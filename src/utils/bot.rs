@@ -19,3 +19,9 @@ pub async fn defer_based_on_ephemeral(
         }
     }
 }
+
+pub async fn is_admin(ctx: Context<'_>) -> Result<bool, Error> {
+    let data = ctx.data();
+    let author_id = ctx.author().id.to_string();
+    Ok(data.config.admin_list.contains(&author_id))
+}
