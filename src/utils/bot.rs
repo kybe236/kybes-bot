@@ -32,11 +32,30 @@ pub async fn is_admin(ctx: Context<'_>) -> Result<bool, Error> {
 pub async fn is_deepseek(ctx: Context<'_>) -> Result<bool, Error> {
     let data = ctx.data();
     let author_id = ctx.author().id.to_string();
+    let on = data.config.read().await.deepseek_whitelist_active;
+    if !on {
+        return Ok(true);
+    }
     Ok(data
         .config
         .read()
         .await
         .deepseek_whitelist
+        .contains(&author_id))
+}
+
+pub async fn is_youtube(ctx: Context<'_>) -> Result<bool, Error> {
+    let data = ctx.data();
+    let author_id = ctx.author().id.to_string();
+    let on = data.config.read().await.youtube_whitelist_active;
+    if !on {
+        return Ok(true);
+    }
+    Ok(data
+        .config
+        .read()
+        .await
+        .youtube_whitelist
         .contains(&author_id))
 }
 

@@ -6,3 +6,5 @@ pub mod morse;
 pub use morse::*;
 pub mod api;
 pub use api::*;
+pub mod youtube;
+pub use youtube::*;

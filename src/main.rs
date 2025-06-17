@@ -23,8 +23,10 @@ pub struct Config {
     discord_token: String,
     deepseek_token: Option<String>,
     youtube_token: Option<String>,
+    youtube_whitelist_active: bool,
+    youtube_whitelist: Vec<String>,
     admin_list: Vec<String>,
-    deepseek_whitelisted: bool,
+    deepseek_whitelist_active: bool,
     deepseek_whitelist: Vec<String>,
 }
 
@@ -34,8 +36,10 @@ impl Default for Config {
             discord_token: "".to_string(),
             admin_list: vec!["921066050009833572".to_string()],
             youtube_token: None,
+            youtube_whitelist_active: false,
+            youtube_whitelist: vec!["921066050009833572".to_string()],
             deepseek_token: None,
-            deepseek_whitelisted: true,
+            deepseek_whitelist_active: true,
             deepseek_whitelist: vec!["921066050009833572".to_string()],
         }
     }
@@ -179,6 +183,7 @@ async fn main() {
             commands::time(),
             commands::deepseek(),
             commands::reload_settings(),
+            commands::yt_vid(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,

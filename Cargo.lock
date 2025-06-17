@@ -1038,6 +1038,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "poise",
+ "regex",
  "reqwest 0.12.20",
  "serde",
  "serde_json",
