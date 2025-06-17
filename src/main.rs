@@ -196,6 +196,7 @@ async fn main() {
             commands::reminder(),
             commands::reminders(),
             commands::delete_reminder(),
+            commands::github(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,

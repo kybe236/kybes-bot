@@ -16,3 +16,5 @@ pub mod alias;
 pub use alias::*;
 pub mod reminders;
 pub use reminders::*;
+pub mod github;
+pub use github::*;
