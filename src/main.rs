@@ -19,6 +19,8 @@ type Context<'a> = poise::Context<'a, Data, Error>;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Config {
     discord_token: String,
+    deepseek_token: Option<String>,
+    youtube_token: Option<String>,
     admin_list: Vec<String>,
 }
 
@@ -27,6 +29,8 @@ impl Default for Config {
         Config {
             discord_token: "".to_string(),
             admin_list: vec!["921066050009833572".to_string()],
+            youtube_token: None,
+            deepseek_token: None,
         }
     }
 }
@@ -39,9 +43,25 @@ impl Config {
             Ok(config)
         } else {
             let token = Self::ask_token().await?;
+            let youtube_token = Self::ask_youtube_token().await?;
+            let deepseek_token = Self::ask_deepseek_token().await?;
+
+            let youtube_token = if youtube_token.is_empty() {
+                None
+            } else {
+                Some(youtube_token)
+            };
+
+            let deepseek_token = if deepseek_token.is_empty() {
+                None
+            } else {
+                Some(deepseek_token)
+            };
 
             let config = Config {
                 discord_token: token,
+                youtube_token,
+                deepseek_token,
                 ..Default::default()
             };
             config.save(path).await?;
@@ -50,6 +70,32 @@ impl Config {
     }
 
     async fn ask_token() -> io::Result<String> {
+        print!("DISCORD TOKEN => ");
+        std::io::stdout().flush().unwrap();
+
+        let mut token = String::new();
+        let mut reader = BufReader::new(io::stdin());
+        reader.read_line(&mut token).await?;
+        Ok(token.trim().to_string())
+    }
+
+    async fn ask_deepseek_token() -> io::Result<String> {
+        println!("https://platform.deepseek.com/api_keys");
+        println!("keep empty to not set");
+        print!("DEEPSEEK TOKEN => ");
+        std::io::stdout().flush().unwrap();
+
+        let mut token = String::new();
+        let mut reader = BufReader::new(io::stdin());
+        reader.read_line(&mut token).await?;
+        Ok(token.trim().to_string())
+    }
+
+    async fn ask_youtube_token() -> io::Result<String> {
+        println!(
+            "https://console.cloud.google.com/apis/library/youtube.googleapis.com?inv=1&invt=Ab0XxQ&project=semiotic-lamp-376120"
+        );
+        println!("keep empty to not set");
         print!("DISCORD TOKEN => ");
         std::io::stdout().flush().unwrap();
 
@@ -116,6 +162,7 @@ async fn main() {
             commands::stop(),
             commands::version(),
             commands::morse(),
+            commands::time(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
@@ -141,6 +188,7 @@ async fn main() {
         ..Default::default()
     };
 
+    config.save("config.json").await.unwrap();
     let framework = poise::Framework::builder()
         .setup(move |ctx, ready, framework| {
             let config = config.clone();
