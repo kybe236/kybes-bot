@@ -17,3 +17,5 @@ serde_json = "1.0.140"
 
 chrono = "0.4.41"
 chrono-tz = "0.10.3"
+
+reqwest = { version = "0.12.20", features = ["json", "gzip", "stream"] }

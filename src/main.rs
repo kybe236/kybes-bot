@@ -1,13 +1,14 @@
 mod commands;
 mod utils;
 
-use std::{io::Write, path::Path};
+use std::{io::Write, path::Path, sync::Arc, vec};
 
 use serde::{Deserialize, Serialize};
 use serenity::all::{CacheHttp, ClientBuilder, GatewayIntents, UserId};
 use tokio::{
     fs,
     io::{self, AsyncBufReadExt, BufReader},
+    sync::RwLock,
 };
 use tracing::{error, info, warn};
 
@@ -17,11 +18,14 @@ type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(default)]
 pub struct Config {
     discord_token: String,
     deepseek_token: Option<String>,
     youtube_token: Option<String>,
     admin_list: Vec<String>,
+    deepseek_whitelisted: bool,
+    deepseek_whitelist: Vec<String>,
 }
 
 impl Default for Config {
@@ -31,6 +35,8 @@ impl Default for Config {
             admin_list: vec!["921066050009833572".to_string()],
             youtube_token: None,
             deepseek_token: None,
+            deepseek_whitelisted: true,
+            deepseek_whitelist: vec!["921066050009833572".to_string()],
         }
     }
 }
@@ -112,12 +118,12 @@ impl Config {
 }
 
 pub struct Data {
-    pub config: Config,
+    pub config: Arc<RwLock<Config>>,
 }
 
 async fn dm_admins_error(ctx: crate::Context<'_>, error: &str) {
     let data = ctx.data();
-    let admin_list = data.config.admin_list.clone();
+    let admin_list = data.config.read().await.admin_list.clone();
     for admin_str in admin_list {
         if let Ok(admin_id) = admin_str.parse::<u64>() {
             let channel = UserId::new(admin_id).create_dm_channel(ctx.http()).await;
@@ -163,6 +169,7 @@ async fn main() {
             commands::version(),
             commands::morse(),
             commands::time(),
+            commands::deepseek(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
@@ -191,7 +198,7 @@ async fn main() {
     config.save("config.json").await.unwrap();
     let framework = poise::Framework::builder()
         .setup(move |ctx, ready, framework| {
-            let config = config.clone();
+            let config = Arc::new(RwLock::new(config));
 
             Box::pin(async move {
                 let git_hash = match get_git_hash().await {
@@ -202,7 +209,7 @@ async fn main() {
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
 
                 // Send git hash to all admins
-                for admin_str in &config.admin_list {
+                for admin_str in &config.read().await.admin_list {
                     if let Ok(admin_id) = admin_str.parse::<u64>() {
                         let user = UserId::new(admin_id);
                         if let Ok(channel) = user.create_dm_channel(ctx.http()).await {

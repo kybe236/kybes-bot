@@ -2,7 +2,7 @@ use tokio::process::Command;
 
 pub async fn get_git_hash() -> Option<String> {
     let output = Command::new("git")
-        .args(&["rev-parse", "HEAD"])
+        .args(["rev-parse", "HEAD"])
         .output()
         .await
         .ok()?;
