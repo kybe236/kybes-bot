@@ -4,12 +4,14 @@ mod utils;
 use std::{io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
-use serenity::all::{ClientBuilder, GatewayIntents, UserId};
+use serenity::all::{CacheHttp, ClientBuilder, GatewayIntents, UserId};
 use tokio::{
     fs,
     io::{self, AsyncBufReadExt, BufReader},
 };
 use tracing::{error, info, warn};
+
+use crate::utils::git::get_git_hash;
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
@@ -146,9 +148,27 @@ async fn main() {
     let framework = poise::Framework::builder()
         .setup(move |ctx, ready, framework| {
             let config = config.clone();
+
             Box::pin(async move {
-                info!("LOGGED IN AS: {}", ready.user.name);
+                let git_hash = match get_git_hash().await {
+                    Some(v) => v,
+                    None => "".to_string(),
+                };
+                info!("LOGGED IN AS: {} ON {}", ready.user.name, git_hash);
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+
+                // Send git hash to all admins
+                for admin_str in &config.admin_list {
+                    if let Ok(admin_id) = admin_str.parse::<u64>() {
+                        let user = UserId::new(admin_id);
+                        if let Ok(channel) = user.create_dm_channel(ctx.http()).await {
+                            let _ = channel
+                                .say(ctx.http(), format!("Bot started! Git hash: {}", git_hash))
+                                .await;
+                        }
+                    }
+                }
+
                 Ok(Data { config })
             })
         })
