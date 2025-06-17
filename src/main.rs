@@ -115,6 +115,14 @@ impl Config {
         let json = serde_json::to_string_pretty(self)?;
         fs::write(path, json).await
     }
+
+    pub async fn reload(&mut self, path: &str) -> io::Result<()> {
+        let data = fs::read_to_string(path).await?;
+        let new_config: Config = serde_json::from_str(&data)?;
+
+        *self = new_config;
+        Ok(())
+    }
 }
 
 pub struct Data {
@@ -170,6 +178,7 @@ async fn main() {
             commands::morse(),
             commands::time(),
             commands::deepseek(),
+            commands::reload_settings(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,

@@ -5,7 +5,7 @@ use poise::CreateReply;
 use crate::{
     Context, Error,
     utils::{
-        bot::{self, is_admin},
+        bot::{self, error_text, is_admin},
         git::get_git_hash,
     },
 };
@@ -35,12 +35,13 @@ pub async fn stop(
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
 
     if !is_admin(ctx).await? {
-        ctx.send(
-            CreateReply::default()
-                .content("You are not allowed to run the /stop command")
-                .ephemeral(ephemeral),
+        error_text(
+            &ctx,
+            ephemeral,
+            "You are not allowed to run the /stop command",
         )
-        .await?;
+        .await;
+        return Ok(());
     }
 
     ctx.send(

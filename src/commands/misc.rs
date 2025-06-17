@@ -4,7 +4,7 @@ use poise::CreateReply;
 
 use crate::{
     Context, Error,
-    utils::bot::{self},
+    utils::bot::{self, error_text, is_admin},
 };
 
 #[poise::command(slash_command)]
@@ -66,6 +66,40 @@ pub async fn test(
     ctx.send(
         CreateReply::default()
             .content("HELLO WORLD FROM 2kybe3!")
+            .ephemeral(ephemeral),
+    )
+    .await?;
+
+    Ok(())
+}
+
+#[poise::command(slash_command)]
+pub async fn reload_settings(
+    ctx: Context<'_>,
+    #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
+) -> Result<(), Error> {
+    let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
+
+    if !is_admin(ctx).await? {
+        error_text(
+            &ctx,
+            ephemeral,
+            "You are not allowed to run the /reload_settings command",
+        )
+        .await;
+        return Ok(());
+    }
+
+    ctx.data()
+        .config
+        .write()
+        .await
+        .reload("config.json")
+        .await?;
+
+    ctx.send(
+        CreateReply::default()
+            .content("reloaded config!")
             .ephemeral(ephemeral),
     )
     .await?;
