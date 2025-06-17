@@ -1,16 +1,70 @@
 mod commands;
 mod utils;
 
-use std::env::var;
+use std::{io::Write, path::Path};
 
+use serde::{Deserialize, Serialize};
 use serenity::all::{ClientBuilder, GatewayIntents};
+use tokio::{
+    fs,
+    io::{self, AsyncBufReadExt, BufReader},
+};
 use tracing::{error, info};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct Config {
+    discord_token: String,
+    admin_list: Vec<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Config {
+            discord_token: "".to_string(),
+            admin_list: vec!["921066050009833572".to_string()],
+        }
+    }
+}
+
+impl Config {
+    pub async fn load_or_create(path: &str) -> io::Result<Self> {
+        if Path::new(path).exists() {
+            let data = fs::read_to_string(path).await?;
+            let config = serde_json::from_str(&data)?;
+            Ok(config)
+        } else {
+            let token = Self::ask_token().await?;
+
+            let config = Config {
+                discord_token: token,
+                ..Default::default()
+            };
+            config.save(path).await?;
+            Ok(config)
+        }
+    }
+
+    async fn ask_token() -> io::Result<String> {
+        print!("DISCORD TOKEN => ");
+        std::io::stdout().flush().unwrap();
+
+        let mut token = String::new();
+        let mut reader = BufReader::new(io::stdin());
+        reader.read_line(&mut token).await?;
+        Ok(token.trim().to_string())
+    }
+
+    pub async fn save(&self, path: &str) -> io::Result<()> {
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(path, json).await
+    }
+}
+
 pub struct Data {
-    // TODO: Implement a class to store reminders and save it to a file
+    pub config: Config,
 }
 
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
@@ -25,9 +79,13 @@ async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt::init();
+    let config = Config::load_or_create("config.json")
+        .await
+        .expect("Failed to load or create config");
 
-    // TODO: load a config file and provide a setup wizard if launched for the first time
+    let token = config.discord_token.clone();
+
+    tracing_subscriber::fmt::init();
 
     let opt = poise::FrameworkOptions {
         commands: vec![commands::test()],
@@ -66,19 +124,16 @@ async fn main() {
 
     let framework = poise::Framework::builder()
         .setup(move |ctx, ready, framework| {
+            let config = config.clone();
             Box::pin(async move {
                 info!("LOGGED IN AS: {}", ready.user.name);
                 poise::builtins::register_globally(ctx, &framework.options().commands).await?;
-                Ok(Data {
-                // TODO: add data here
-            })
+                Ok(Data { config })
             })
         })
         .options(opt)
         .build();
 
-    // TODO: setup bot with token from a setting.file
-    let token = var("DISCORD_TOKEN").expect("MISSING DISCORD TOKEN!");
     let intents = GatewayIntents::non_privileged();
 
     let client = ClientBuilder::new(token, intents)

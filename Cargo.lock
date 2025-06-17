@@ -849,6 +849,8 @@ name = "kybes-bot"
 version = "0.1.0"
 dependencies = [
  "poise",
+ "serde",
+ "serde_json",
  "serenity",
  "tokio",
  "tracing",
