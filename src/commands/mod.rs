@@ -12,3 +12,5 @@ pub mod mc_server;
 pub use mc_server::*;
 pub mod cat;
 pub use cat::*;
+pub mod alias;
+pub use alias::*;

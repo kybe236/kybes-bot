@@ -191,6 +191,8 @@ async fn main() {
             commands::ping(),
             commands::dump_ping(),
             commands::cat(),
+            commands::save_alias(),
+            commands::alias(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
