@@ -4,12 +4,12 @@ mod utils;
 use std::{io::Write, path::Path};
 
 use serde::{Deserialize, Serialize};
-use serenity::all::{ClientBuilder, GatewayIntents};
+use serenity::all::{ClientBuilder, GatewayIntents, UserId};
 use tokio::{
     fs,
     io::{self, AsyncBufReadExt, BufReader},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 type Error = Box<dyn std::error::Error + Send + Sync>;
 type Context<'a> = poise::Context<'a, Data, Error>;
@@ -67,12 +67,33 @@ pub struct Data {
     pub config: Config,
 }
 
+async fn dm_admins_error(ctx: crate::Context<'_>, error: &str) {
+    let data = ctx.data();
+    let admin_list = data.config.admin_list.clone();
+    for admin_str in admin_list {
+        if let Ok(admin_id) = admin_str.parse::<u64>() {
+            let channel = UserId::new(admin_id).create_dm_channel(ctx.http()).await;
+            if let Ok(channel) = channel {
+                let _ = channel
+                    .say(ctx.http(), format!("An error occurred: {}", error))
+                    .await;
+                warn!("An error occurred: {}", error);
+            }
+        }
+    }
+}
+
 async fn on_error(error: poise::FrameworkError<'_, Data, Error>) {
     match error {
         poise::FrameworkError::Setup { error, .. } => panic!("Failed to start bot: {:?}", error),
+        poise::FrameworkError::Command { error, ctx, .. } => {
+            dm_admins_error(ctx, &error.to_string()).await
+        }
+        poise::FrameworkError::CommandPanic { payload, ctx, .. } => {
+            dm_admins_error(ctx, &format!("PANIC: {}", payload.unwrap_or_default())).await
+        }
         error => {
-            // TODO: dm all bot admins about the error
-            error!("ERROR: {:#?}", error.to_string()); // For now very basic logging
+            error!("ERROR: {:#?}", error.to_string());
         }
     }
 }
