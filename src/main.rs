@@ -111,7 +111,12 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let opt = poise::FrameworkOptions {
-        commands: vec![commands::test(), commands::stop(), commands::version()],
+        commands: vec![
+            commands::test(),
+            commands::stop(),
+            commands::version(),
+            commands::morse(),
+        ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
             ..Default::default()
