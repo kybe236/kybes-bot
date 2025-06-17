@@ -4,8 +4,28 @@ use poise::CreateReply;
 
 use crate::{
     Context, Error,
-    utils::bot::{self, is_admin},
+    utils::{
+        bot::{self, is_admin},
+        git::get_git_hash,
+    },
 };
+
+#[poise::command(slash_command)]
+pub async fn version(
+    ctx: Context<'_>,
+    #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
+) -> Result<(), Error> {
+    let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
+
+    ctx.send(
+        CreateReply::default()
+            .content(get_git_hash().await.unwrap_or("INVALID".to_string()))
+            .ephemeral(ephemeral),
+    )
+    .await?;
+
+    Ok(())
+}
 
 #[poise::command(slash_command)]
 pub async fn stop(

@@ -111,7 +111,7 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let opt = poise::FrameworkOptions {
-        commands: vec![commands::test(), commands::stop()],
+        commands: vec![commands::test(), commands::stop(), commands::version()],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
             ..Default::default()
@@ -127,15 +127,6 @@ async fn main() {
                 info!("FINISHED COMMAND: {}", ctx.command().qualified_name);
             })
         },
-        command_check: Some(|ctx| {
-            // TODO: make it load the whitelist from the config file
-            Box::pin(async move {
-                if ctx.author().id == 921066050009833572 {
-                    return Ok(true);
-                }
-                Ok(false)
-            })
-        }),
         event_handler: |_ctx, event, _framework, _data| {
             Box::pin(async move {
                 info!("EVENT RECEIVED: {:?}", event.snake_case_name());
