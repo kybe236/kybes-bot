@@ -28,6 +28,8 @@ pub struct Config {
     admin_list: Vec<String>,
     deepseek_whitelist_active: bool,
     deepseek_whitelist: Vec<String>,
+    ping_whitelist_active: bool,
+    ping_witelist: Vec<String>,
 }
 
 impl Default for Config {
@@ -41,6 +43,8 @@ impl Default for Config {
             deepseek_token: None,
             deepseek_whitelist_active: true,
             deepseek_whitelist: vec!["921066050009833572".to_string()],
+            ping_whitelist_active: false,
+            ping_witelist: vec!["921066050009833572".to_string()],
         }
     }
 }
@@ -184,6 +188,8 @@ async fn main() {
             commands::deepseek(),
             commands::reload_settings(),
             commands::yt_vid(),
+            commands::ping(),
+            commands::dump_ping(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,

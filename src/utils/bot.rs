@@ -59,6 +59,16 @@ pub async fn is_youtube(ctx: Context<'_>) -> Result<bool, Error> {
         .contains(&author_id))
 }
 
+pub async fn is_ping(ctx: Context<'_>) -> Result<bool, Error> {
+    let data = ctx.data();
+    let author_id = ctx.author().id.to_string();
+    let on = data.config.read().await.ping_whitelist_active;
+    if !on {
+        return Ok(true);
+    }
+    Ok(data.config.read().await.ping_witelist.contains(&author_id))
+}
+
 pub async fn error_and_return<E: std::error::Error + Send + Sync + 'static>(
     ctx: &Context<'_>,
     ephemeral: bool,
