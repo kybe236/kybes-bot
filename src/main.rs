@@ -193,6 +193,9 @@ async fn main() {
             commands::cat(),
             commands::save_alias(),
             commands::alias(),
+            commands::reminder(),
+            commands::reminders(),
+            commands::delete_reminder(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
@@ -242,6 +245,8 @@ async fn main() {
                         }
                     }
                 }
+
+                commands::start_reminder_loop(ctx.clone()).await;
 
                 Ok(Data { config })
             })

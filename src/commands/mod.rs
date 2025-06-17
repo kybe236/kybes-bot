@@ -14,3 +14,5 @@ pub mod cat;
 pub use cat::*;
 pub mod alias;
 pub use alias::*;
+pub mod reminders;
+pub use reminders::*;
