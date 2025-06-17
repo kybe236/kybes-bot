@@ -190,6 +190,7 @@ async fn main() {
             commands::yt_vid(),
             commands::ping(),
             commands::dump_ping(),
+            commands::cat(),
         ],
         prefix_options: poise::PrefixFrameworkOptions {
             prefix: None,
