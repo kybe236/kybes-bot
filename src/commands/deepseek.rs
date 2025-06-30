@@ -12,43 +12,44 @@ use crate::{
 #[poise::command(slash_command)]
 pub async fn deepseek(
     ctx: Context<'_>,
-    #[description = "prompt"] text: String,
+    #[description = "Prompt"] text: String,
     #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
 ) -> Result<(), Error> {
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
 
+    // Authorization check
     if !is_deepseek(ctx).await? {
         error_text(&ctx, ephemeral, "You are not allowed to use deepseek!").await;
         return Ok(());
     }
 
-    if text.is_empty() {
+    if text.trim().is_empty() {
         error_text(&ctx, ephemeral, "Please provide a prompt").await;
         return Ok(());
     }
 
-    let api_key = ctx.data().config.read().await.deepseek_token.clone();
-    let api_key = match api_key {
+    // Get API key safely
+    let api_key = match ctx.data().config.read().await.deepseek_token.clone() {
         Some(key) => key,
         None => {
-            error_text(&ctx, ephemeral, "Sorry! but theres no deepseek key!").await;
+            error_text(&ctx, ephemeral, "Sorry! but there's no deepseek key!").await;
             return Ok(());
         }
     };
 
+    // Initial reply (deferred) to user
     let reply = ctx
         .send(
             CreateReply::default()
-                .content("please wait...")
+                .content("Please wait...")
                 .ephemeral(ephemeral),
         )
         .await?;
 
-    let url = "https://api.deepseek.com/v1/chat/completions";
+    // Setup request
     let client = reqwest::Client::new();
-
-    let response = match client
-        .post(url)
+    let response = client
+        .post("https://api.deepseek.com/v1/chat/completions")
         .header("Authorization", format!("Bearer {}", api_key))
         .header("Accept", "text/event-stream")
         .json(&serde_json::json!({
@@ -58,20 +59,24 @@ pub async fn deepseek(
         }))
         .send()
         .await
-    {
-        Ok(response) => response,
-        Err(e) => {
-            return error_and_return(&ctx, ephemeral, e).await;
-        }
+        .map_err(|e| {
+            tracing::error!("Deepseek request error: {}", e);
+            e
+        });
+
+    let response = match response {
+        Ok(resp) => resp,
+        Err(e) => return error_and_return(&ctx, ephemeral, e).await,
     };
 
     if !response.status().is_success() {
         let err_text = response.text().await.unwrap_or_default();
         error_text(&ctx, ephemeral, &format!("API error: {}", err_text)).await;
-        reply.delete(ctx).await?;
+        reply.delete(ctx).await.ok();
         return Ok(());
     }
 
+    // Stream the response incrementally
     let mut stream = response.bytes_stream();
     let mut collected = String::new();
 
@@ -79,7 +84,6 @@ pub async fn deepseek(
         match item {
             Ok(chunk) => {
                 let text_chunk = String::from_utf8_lossy(&chunk);
-
                 for line in text_chunk.lines() {
                     if let Some(data) = line.strip_prefix("data: ") {
                         if data == "[DONE]" {
@@ -90,22 +94,16 @@ pub async fn deepseek(
                             if let Some(content) = json["choices"][0]["delta"]["content"].as_str() {
                                 collected.push_str(content);
 
+                                // Update reply every 5 characters or when big enough
                                 if collected.len() % 5 == 0 && !collected.is_empty() {
-                                    if collected.len() > 1750 {
-                                        reply
-                                            .edit(
-                                                ctx,
-                                                CreateReply::default().content(
-                                                    collected[..1750].to_string()
-                                                        + "\nwait for the rest...",
-                                                ),
-                                            )
-                                            .await?;
+                                    let content_to_send = if collected.len() > 1750 {
+                                        format!("{}\n(wait for the rest...)", &collected[..1750])
                                     } else {
-                                        reply
-                                            .edit(ctx, CreateReply::default().content(&collected))
-                                            .await?;
-                                    }
+                                        collected.clone()
+                                    };
+                                    reply
+                                        .edit(ctx, CreateReply::default().content(content_to_send))
+                                        .await?;
                                 }
                             }
                         }
@@ -120,7 +118,8 @@ pub async fn deepseek(
         }
     }
 
-    reply.delete(ctx).await?;
+    reply.delete(ctx).await.ok();
+
     ctx.send(
         CreateReply::default()
             .embed(

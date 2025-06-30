@@ -24,24 +24,21 @@ static RESOLVER: Lazy<TokioAsyncResolver> =
     Lazy::new(|| TokioAsyncResolver::tokio(ResolverConfig::default(), ResolverOpts::default()));
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-
-const HANDSHAKE_PACKET_ID: i32 = 0x0;
-const STATUS_REQUEST_PACKET_ID: i32 = 0x0;
+const HANDSHAKE_ID: i32 = 0x0;
+const STATUS_REQUEST_ID: i32 = 0x0;
 const NEXT_STATE_STATUS: i32 = 1;
 
+/// Represents an error during the ping process.
 #[derive(Debug, Error)]
 pub enum PingError {
     #[error("DNS SRV resolution failed: {0}")]
     SrvResolutionFailed(String),
 
-    #[error("Target host could not be resolved: {0}")]
-    HostResolutionFailed(std::io::Error),
+    #[error("Host resolution failed: {0}")]
+    HostResolutionFailed(#[from] std::io::Error),
 
-    #[error("TCP connection failed: {0}")]
-    TcpConnectFailed(#[from] std::io::Error),
-
-    #[error("TCP connection timed out")]
-    TcpConnectTimeout,
+    #[error("Connection timed out")]
+    ConnectTimeout,
 
     #[error("Protocol error: {0}")]
     Protocol(String),
@@ -50,6 +47,7 @@ pub enum PingError {
     JsonError(#[from] serde_json::Error),
 }
 
+/// Mineserver status information.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ServerStatus {
     pub version: Version,
@@ -80,74 +78,89 @@ pub struct PlayerSample {
     pub id: String,
 }
 
+/// Pings a Minecraft server to retrieve its status.
 pub async fn ping(
     hostname: &str,
     default_port: u16,
     protocol_version: i32,
 ) -> Result<ServerStatus, PingError> {
-    let (target_host, port) = match hostname.parse::<IpAddr>() {
-        Ok(ip) => (ip.to_string(), default_port),
-        Err(_) => {
-            let srv_name = format!("_minecraft._tcp.{}", hostname);
-            match RESOLVER.srv_lookup(srv_name).await {
-                Ok(lookup) => {
-                    let srv = lookup.iter().next().ok_or_else(|| {
-                        PingError::SrvResolutionFailed("No SRV records found".into())
-                    })?;
-                    (srv.target().to_utf8(), srv.port())
-                }
-                Err(_) => (hostname.to_string(), default_port),
-            }
-        }
-    };
+    let (host, port) = resolve_host(hostname, default_port).await?;
+    let mut stream = connect(host.as_str(), port).await?;
 
-    let mut addrs = tokio::net::lookup_host((target_host.as_str(), port))
-        .await
-        .map_err(PingError::HostResolutionFailed)?;
+    // Send handshake and status request
+    stream
+        .write_all(&handshake_packet(protocol_version, hostname, port))
+        .await?;
+    stream.write_all(&status_request_packet()).await?;
 
-    let real_ip = addrs
-        .next()
-        .ok_or_else(|| {
-            PingError::HostResolutionFailed(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "No addresses found",
-            ))
-        })?
-        .ip();
+    // Read response
+    let response = read_response(&mut stream).await?;
+    validate_packet_id(response.packet_id)?;
 
-    let stream = timeout(CONNECT_TIMEOUT, TcpStream::connect((real_ip, port))).await;
-    let mut stream = match stream {
-        Ok(Ok(s)) => s,
-        Ok(Err(e)) => return Err(PingError::TcpConnectFailed(e)),
-        Err(_) => return Err(PingError::TcpConnectTimeout),
-    };
-
-    let handshake_packet =
-        create_handshake_packet(protocol_version, hostname, port, NEXT_STATE_STATUS);
-    stream.write_all(&handshake_packet).await?;
-
-    let status_request = create_status_request();
-    stream.write_all(&status_request).await?;
-
-    let len = read_var_int_from_stream(&mut stream).await?;
-    let mut response_bytes = vec![0; len as usize];
-    stream.read_exact(&mut response_bytes).await?;
-
-    let mut index = 0;
-    let packet_id = read_var_int(&response_bytes, Some(&mut index));
-    let response = read_string(&response_bytes, &mut index)
-        .map_err(|e| PingError::Protocol(format!("Failed to read response: {}", e)))?;
-
-    if packet_id != 0 {
-        return Err(PingError::Protocol(format!(
-            "Unexpected response code: {}",
-            packet_id
-        )));
-    }
-
-    let mut status: ServerStatus = serde_json::from_str(&response)?;
+    let mut status: ServerStatus = serde_json::from_str(&response.json)?;
     status.description = extract_text(&status.raw_description);
     Ok(status)
+}
+
+async fn resolve_host(hostname: &str, default_port: u16) -> Result<(String, u16), PingError> {
+    // Try numeric IP first
+    if hostname.parse::<IpAddr>().is_ok() {
+        return Ok((hostname.to_string(), default_port));
+    }
+
+    // Fallback to SRV lookup
+    let srv_name = format!("_minecraft._tcp.{}", hostname);
+    if let Ok(lookup) = RESOLVER.srv_lookup(srv_name).await {
+        if let Some(record) = lookup.iter().next() {
+            return Ok((record.target().to_utf8(), record.port()));
+        }
+        return Err(PingError::SrvResolutionFailed(
+            "no SRV records found".into(),
+        ));
+    }
+
+    Ok((hostname.to_string(), default_port))
+}
+
+async fn connect(host: &str, port: u16) -> Result<TcpStream, PingError> {
+    let mut lookup = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(PingError::HostResolutionFailed)?;
+    let addr = lookup
+        .next()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no addresses found"))?
+        .ip();
+
+    match timeout(CONNECT_TIMEOUT, TcpStream::connect((addr, port))).await {
+        Ok(Ok(stream)) => Ok(stream),
+        Ok(Err(e)) => Err(PingError::HostResolutionFailed(e)),
+        Err(_) => Err(PingError::ConnectTimeout),
+    }
+}
+
+struct Response {
+    packet_id: i32,
+    json: String,
+}
+
+async fn read_response(stream: &mut TcpStream) -> Result<Response, PingError> {
+    let length = read_var_int_from_stream(stream).await?;
+    let mut buf = vec![0; length as usize];
+    stream.read_exact(&mut buf).await?;
+
+    let mut idx = 0;
+    let packet_id = read_var_int(&buf, Some(&mut idx));
+    let json = read_string(&buf, &mut idx)
+        .map_err(|e| PingError::Protocol(format!("read response: {}", e)))?;
+
+    Ok(Response { packet_id, json })
+}
+
+fn validate_packet_id(id: i32) -> Result<(), PingError> {
+    if id != STATUS_REQUEST_ID {
+        return Err(PingError::Protocol(format!("unexpected packet id: {}", id)));
+    }
+    Ok(())
 }
 
 fn extract_text(value: &Value) -> String {
@@ -155,47 +168,42 @@ fn extract_text(value: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Array(arr) => arr.iter().map(extract_text).collect(),
         Value::Object(map) => {
-            let mut result = String::new();
-
-            if let Some(text_val) = map.get("text") {
-                result.push_str(&extract_text(text_val));
+            let mut text = String::new();
+            if let Some(v) = map.get("text") {
+                text.push_str(&extract_text(v));
             }
-
-            if let Some(extra_val) = map.get("extra") {
-                result.push_str(&extract_text(extra_val));
+            if let Some(v) = map.get("extra") {
+                text.push_str(&extract_text(v));
             }
-
-            result
+            text
         }
         _ => String::new(),
     }
 }
 
-fn create_packet(packet_id: i32, payload_writer: impl FnOnce(&mut Vec<u8>)) -> Vec<u8> {
+fn packet<F>(id: i32, write: F) -> Vec<u8>
+where
+    F: FnOnce(&mut Vec<u8>),
+{
     let mut payload = Vec::new();
-    write_var_int(&mut payload, &packet_id);
-    payload_writer(&mut payload);
+    write_var_int(&mut payload, &id);
+    write(&mut payload);
 
-    let mut packet = Vec::new();
-    write_var_int(&mut packet, &(payload.len() as i32));
-    packet.extend_from_slice(&payload);
-    packet
+    let mut pkt = Vec::new();
+    write_var_int(&mut pkt, &(payload.len() as i32));
+    pkt.extend(payload);
+    pkt
 }
 
-fn create_handshake_packet(
-    protocol_version: i32,
-    server_address: &str,
-    server_port: u16,
-    next_state: i32,
-) -> Vec<u8> {
-    create_packet(HANDSHAKE_PACKET_ID, |buf| {
-        write_var_int(buf, &protocol_version);
-        write_string(buf, server_address);
-        write_u16(buf, server_port);
-        write_var_int(buf, &next_state);
+fn handshake_packet(version: i32, address: &str, port: u16) -> Vec<u8> {
+    packet(HANDSHAKE_ID, |buf| {
+        write_var_int(buf, &version);
+        write_string(buf, address);
+        write_u16(buf, port);
+        write_var_int(buf, &NEXT_STATE_STATUS);
     })
 }
 
-fn create_status_request() -> Vec<u8> {
-    create_packet(STATUS_REQUEST_PACKET_ID, |_| {})
+fn status_request_packet() -> Vec<u8> {
+    packet(STATUS_REQUEST_ID, |_| {})
 }

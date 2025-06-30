@@ -1,3 +1,4 @@
+use once_cell::sync::Lazy;
 use poise::CreateReply;
 use regex::Regex;
 use serde::Deserialize;
@@ -7,6 +8,10 @@ use crate::{
     Context, Error,
     utils::bot::{self, error_and_return, error_text, is_youtube},
 };
+
+// Compile regex once
+static YT_ID_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?:v=|\/)([0-9A-Za-z_-]{11})").expect("Invalid regex"));
 
 #[poise::command(slash_command)]
 pub async fn yt_vid(
@@ -18,23 +23,29 @@ pub async fn yt_vid(
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
 
     if !is_youtube(ctx).await? {
-        error_text(&ctx, ephemeral, "You are not allowed to use youtube api!").await;
+        error_text(
+            &ctx,
+            ephemeral,
+            "You are not allowed to use the YouTube API!",
+        )
+        .await;
         return Ok(());
     }
 
-    let re = Regex::new(r"(?:v=|\/)([0-9A-Za-z_-]{11})").unwrap();
-    let video_id = match re.captures(&url).and_then(|caps| caps.get(1)) {
+    let video_id = match YT_ID_REGEX.captures(&url).and_then(|caps| caps.get(1)) {
         Some(m) => m.as_str(),
         None => {
-            error_text(&ctx, ephemeral, "Invalid YouTube URL").await;
+            error_text(&ctx, ephemeral, "Invalid YouTube URL provided").await;
             return Ok(());
         }
     };
 
-    let api_key = match ctx.data().config.read().await.youtube_token.clone() {
-        Some(v) => v,
-        None => {
-            error_text(&ctx, ephemeral, "NO youtube api key set").await;
+    let config = ctx.data().config.read().await;
+
+    let api_key = match config.youtube_token.as_deref() {
+        Some(key) if !key.is_empty() => key.to_owned(), // Clone key to own the string
+        _ => {
+            error_text(&ctx, ephemeral, "No YouTube API key configured").await;
             return Ok(());
         }
     };
@@ -43,66 +54,71 @@ pub async fn yt_vid(
         "https://www.googleapis.com/youtube/v3/videos?part=snippet,statistics&id={video_id}&key={api_key}"
     );
 
-    let res = match reqwest::get(&api_url).await {
-        Ok(res) => res,
+    let response = match reqwest::get(&api_url).await {
+        Ok(resp) => resp,
         Err(e) => {
-            return error_and_return(&ctx, ephemeral, e).await;
+            error_and_return(&ctx, ephemeral, e).await?;
+            return Ok(());
         }
     };
 
-    let res = match res.json::<YouTubeResponse>().await {
-        Ok(res) => res,
+    let yt_response: YouTubeResponse = match response.json().await {
+        Ok(json) => json,
         Err(e) => {
-            return error_and_return(&ctx, ephemeral, e).await;
+            error_and_return(&ctx, ephemeral, e).await?;
+            return Ok(());
         }
     };
 
-    if let Some(video) = res.items.first() {
-        let link = format!("https://youtu.be/{}", video.id);
-        let mut embed = CreateEmbed::default()
-            .title(&video.snippet.title)
-            .url(&link)
-            .thumbnail(&video.snippet.thumbnails.high.url)
-            .field("Channel", &video.snippet.channel_title, true)
-            .field("Published", &video.snippet.published_at[..10], true)
-            .field("Views", &video.statistics.view_count, true)
-            .field(
-                "Likes",
-                video.statistics.like_count.as_deref().unwrap_or("N/A"),
-                true,
-            )
-            .field(
-                "Comments",
-                video.statistics.comment_count.as_deref().unwrap_or("N/A"),
-                true,
-            )
-            .field(
-                "Like View Ratio",
-                format!(
-                    "{:.2}%",
-                    video
-                        .statistics
-                        .like_count
-                        .clone()
-                        .and_then(|likes| likes.parse::<f64>().ok())
-                        .map_or(0.0, |likes| {
-                            (likes / video.statistics.view_count.parse::<f64>().unwrap_or(1.0))
-                                * 100.0
-                        })
-                ),
-                true,
-            )
-            .color(Color::RED);
-
-        if show_description.unwrap_or(false) {
-            embed = embed.description(&video.snippet.description);
+    let video = match yt_response.items.first() {
+        Some(video) => video,
+        None => {
+            error_text(&ctx, ephemeral, "Video not found").await;
+            return Ok(());
         }
+    };
 
-        ctx.send(CreateReply::default().ephemeral(ephemeral).embed(embed))
-            .await?;
+    let link = format!("https://youtu.be/{}", video.id);
+
+    let views = video.statistics.view_count.parse::<f64>().unwrap_or(0.0);
+    let likes = video
+        .statistics
+        .like_count
+        .as_deref()
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+    let like_ratio = if views > 0.0 {
+        (likes / views) * 100.0
     } else {
-        error_text(&ctx, ephemeral, "Video not found").await;
+        0.0
+    };
+
+    let mut embed = CreateEmbed::default()
+        .title(&video.snippet.title)
+        .url(&link)
+        .thumbnail(&video.snippet.thumbnails.high.url)
+        .field("Channel", &video.snippet.channel_title, true)
+        .field("Published", &video.snippet.published_at[..10], true)
+        .field("Views", &video.statistics.view_count, true)
+        .field(
+            "Likes",
+            video.statistics.like_count.as_deref().unwrap_or("N/A"),
+            true,
+        )
+        .field(
+            "Comments",
+            video.statistics.comment_count.as_deref().unwrap_or("N/A"),
+            true,
+        )
+        .field("Like View Ratio", format!("{:.2}%", like_ratio), true)
+        .color(Color::RED);
+
+    if show_description.unwrap_or(false) {
+        embed = embed.description(&video.snippet.description);
     }
+
+    ctx.send(CreateReply::default().ephemeral(ephemeral).embed(embed))
+        .await?;
 
     Ok(())
 }

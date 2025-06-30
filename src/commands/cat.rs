@@ -15,33 +15,52 @@ pub async fn cat(
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
 
     let count = count.unwrap_or(1);
-
     if !(1..=6).contains(&count) {
         error_text(&ctx, ephemeral, "Count must be between 1 and 6.").await;
         return Ok(());
     }
 
+    let client = Client::new();
+
     for _ in 0..count {
-        fetch_and_send_cat_image(&ctx, ephemeral).await?;
+        if let Err(e) = fetch_and_send_cat_image(&ctx, &client, ephemeral).await {
+            // Log or notify error but continue sending remaining images
+            error_text(
+                &ctx,
+                ephemeral,
+                &format!("Failed to fetch a cat image: {}", e),
+            )
+            .await;
+        }
     }
 
     Ok(())
 }
 
-async fn fetch_and_send_cat_image(ctx: &Context<'_>, ephemeral: bool) -> Result<(), Error> {
-    let client = Client::new();
+async fn fetch_and_send_cat_image(
+    ctx: &Context<'_>,
+    client: &Client,
+    ephemeral: bool,
+) -> Result<(), Error> {
     let response = client.get("https://cataas.com/cat").send().await?;
 
-    if response.status().is_success() {
-        let image_bytes = response.bytes().await?;
-        ctx.send(
-            poise::CreateReply::default()
-                .ephemeral(ephemeral)
-                .attachment(CreateAttachment::bytes(image_bytes, "cat.jpg")),
+    if !response.status().is_success() {
+        error_text(
+            ctx,
+            ephemeral,
+            "Failed to fetch a cat image (non-success status).",
         )
-        .await?;
-    } else {
-        error_text(ctx, ephemeral, "Failed to fetch a cat image.").await;
+        .await;
+        return Ok(());
     }
+
+    let image_bytes = response.bytes().await?;
+    ctx.send(
+        poise::CreateReply::default()
+            .ephemeral(ephemeral)
+            .attachment(CreateAttachment::bytes(image_bytes, "cat.jpg")),
+    )
+    .await?;
+
     Ok(())
 }

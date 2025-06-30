@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Local, Utc};
 use chrono_tz::Tz;
 use poise::CreateReply;
 use reqwest::Client;
@@ -6,21 +6,14 @@ use serde_json::Value;
 
 use crate::{
     Context, Error,
-    utils::bot::{self, error_and_return, error_text, is_admin},
+    utils::bot::{self, error_text, is_admin},
 };
 
-#[poise::command(slash_command)]
-pub async fn time(
-    ctx: Context<'_>,
-    #[description = "What timezone to use?"] timezone: Option<String>,
-    #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
-) -> Result<(), Error> {
-    let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
-
+async fn get_time_and_tz(timezone: Option<String>) -> (String, String) {
     let utc_now: DateTime<Utc> = Utc::now();
 
-    let (formatted_time, tz_display) = match timezone {
-        Some(ref tz_string) => match tz_string.parse::<Tz>() {
+    match timezone {
+        Some(tz_string) => match tz_string.parse::<Tz>() {
             Ok(tz) => {
                 let time_in_tz = utc_now.with_timezone(&tz);
                 (
@@ -29,7 +22,7 @@ pub async fn time(
                 )
             }
             Err(_) => {
-                let local = chrono::Local::now();
+                let local = Local::now();
                 (
                     local.format("%d.%m.%Y %H:%M:%S").to_string(),
                     local.offset().to_string(),
@@ -37,13 +30,23 @@ pub async fn time(
             }
         },
         None => {
-            let local = chrono::Local::now();
+            let local = Local::now();
             (
                 local.format("%d.%m.%Y %H:%M:%S").to_string(),
                 local.offset().to_string(),
             )
         }
-    };
+    }
+}
+
+#[poise::command(slash_command)]
+pub async fn time(
+    ctx: Context<'_>,
+    #[description = "What timezone to use?"] timezone: Option<String>,
+    #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
+) -> Result<(), Error> {
+    let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
+    let (formatted_time, tz_display) = get_time_and_tz(timezone).await;
 
     ctx.send(
         CreateReply::default()
@@ -119,6 +122,7 @@ pub async fn print(
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
     let auto_delete = auto_delete.unwrap_or(false);
 
+    // Send a hidden placeholder to defer interaction
     let hide = ctx
         .send(CreateReply::default().content(".").ephemeral(true))
         .await?;
@@ -129,7 +133,24 @@ pub async fn print(
     if auto_delete {
         msg.delete(ctx).await?;
     }
+
     Ok(())
+}
+
+async fn translate_text(text: &str, lang: &str) -> Result<String, reqwest::Error> {
+    let url = format!(
+        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={}&dt=t&q={}",
+        lang,
+        urlencoding::encode(text)
+    );
+    let client = Client::new();
+    let res = client.get(&url).send().await?.json::<Value>().await?;
+
+    if let Some(translated) = res[0][0][0].as_str() {
+        Ok(translated.to_string())
+    } else {
+        Ok("".to_string())
+    }
 }
 
 #[poise::command(slash_command)]
@@ -140,36 +161,20 @@ pub async fn translate(
     #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
 ) -> Result<(), Error> {
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
+    let target_lang = lang.unwrap_or_else(|| "en".to_string());
 
-    let url = format!(
-        "https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl={}&dt=t&q={}",
-        lang.unwrap_or("en".to_string()),
-        urlencoding::encode(&text)
-    );
-
-    let client = Client::new();
-    let res = match client.get(&url).send().await {
-        Ok(res) => res,
-        Err(e) => {
-            return error_and_return(&ctx, ephemeral, e).await;
+    match translate_text(&text, &target_lang).await {
+        Ok(translated) if !translated.is_empty() => {
+            ctx.send(
+                CreateReply::default()
+                    .ephemeral(ephemeral)
+                    .content(translated),
+            )
+            .await?;
         }
-    };
-    let res: Value = match res.json().await {
-        Ok(res) => res,
-        Err(e) => {
-            return error_and_return(&ctx, ephemeral, e).await;
+        _ => {
+            error_text(&ctx, ephemeral, "Empty Answer").await;
         }
-    };
-
-    if let Some(translated) = res[0][0][0].as_str() {
-        ctx.send(
-            CreateReply::default()
-                .ephemeral(ephemeral)
-                .content(translated),
-        )
-        .await?;
-    } else {
-        error_text(&ctx, ephemeral, "Empty Answer").await;
     }
 
     Ok(())

@@ -10,6 +10,33 @@ use crate::{
     utils::bot::{self, error_text},
 };
 
+const REMINDERS_PATH: &str = "reminders.json";
+
+/// Represents a reminder set by a user.
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Reminder {
+    pub time: SystemTime,
+    pub message: String,
+    pub user_id: u64,
+    pub direct: bool,
+}
+
+/// Load reminders from disk asynchronously.
+async fn load_reminders() -> Vec<Reminder> {
+    match fs::read_to_string(REMINDERS_PATH).await {
+        Ok(data) => serde_json::from_str(&data).unwrap_or_default(),
+        Err(_) => vec![],
+    }
+}
+
+/// Save reminders to disk asynchronously.
+async fn save_reminders(reminders: &[Reminder]) {
+    if let Ok(data) = serde_json::to_string_pretty(reminders) {
+        let _ = fs::write(REMINDERS_PATH, data).await;
+    }
+}
+
+/// Slash command to set a new reminder.
 #[poise::command(slash_command)]
 pub async fn reminder(
     ctx: Context<'_>,
@@ -19,6 +46,7 @@ pub async fn reminder(
 ) -> Result<(), Error> {
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
 
+    // Parse duration string using humantime
     let duration = match humantime::parse_duration(&when) {
         Ok(d) => d,
         Err(_) => {
@@ -56,17 +84,18 @@ pub async fn reminder(
     Ok(())
 }
 
+/// Slash command to list all reminders for the user.
 #[poise::command(slash_command)]
 pub async fn reminders(
-    ctx: crate::Context<'_>,
+    ctx: Context<'_>,
     #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
 ) -> Result<(), Error> {
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
-
     let reminders = load_reminders().await;
     let user_id = ctx.author().id.get();
 
-    let user_reminders: Vec<_> = reminders
+    // Collect reminders belonging to the user with their global indices
+    let user_reminders: Vec<(usize, &Reminder)> = reminders
         .iter()
         .enumerate()
         .filter(|(_, r)| r.user_id == user_id)
@@ -83,7 +112,7 @@ pub async fn reminders(
     }
 
     let mut reply = String::from("Your reminders:\n");
-    for (i, reminder) in user_reminders {
+    for (i, reminder) in &user_reminders {
         let remaining = reminder
             .time
             .duration_since(SystemTime::now())
@@ -101,18 +130,19 @@ pub async fn reminders(
     Ok(())
 }
 
+/// Slash command to delete a reminder by its user-visible index.
 #[poise::command(slash_command)]
 pub async fn delete_reminder(
-    ctx: crate::Context<'_>,
-    #[description = "Reminder index from /list-reminders"] index: usize,
+    ctx: Context<'_>,
+    #[description = "Reminder index from /reminders"] index: usize,
     #[description = "Send the response directly to you?"] ephemeral: Option<bool>,
 ) -> Result<(), Error> {
     let ephemeral = bot::defer_based_on_ephemeral(ctx, ephemeral).await?;
-
     let mut reminders = load_reminders().await;
     let user_id = ctx.author().id.get();
 
-    let user_indices: Vec<_> = reminders
+    // Find the global indices of reminders belonging to the user
+    let user_indices: Vec<usize> = reminders
         .iter()
         .enumerate()
         .filter(|(_, r)| r.user_id == user_id)
@@ -143,42 +173,19 @@ pub async fn delete_reminder(
     Ok(())
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct Reminder {
-    pub time: SystemTime,
-    pub message: String,
-    pub user_id: u64,
-    pub direct: bool,
-}
-
-const REMINDERS_PATH: &str = "reminders.json";
-
-async fn load_reminders() -> Vec<Reminder> {
-    if let Ok(data) = fs::read_to_string(REMINDERS_PATH).await {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        vec![]
-    }
-}
-
-async fn save_reminders(reminders: &[Reminder]) {
-    if let Ok(data) = serde_json::to_string_pretty(reminders) {
-        let _ = fs::write(REMINDERS_PATH, data).await;
-    }
-}
-
+/// Starts the background task that checks for due reminders every second.
 pub async fn start_reminder_loop(ctx: serenity::all::Context) {
     tokio::spawn(async move {
         loop {
             let reminders = load_reminders().await;
             let now = SystemTime::now();
 
+            // Partition reminders into due and future
             let (due, future): (Vec<_>, Vec<_>) =
                 reminders.into_iter().partition(|r| r.time <= now);
 
             for reminder in due {
-                let user = ctx.http.get_user(UserId::new(reminder.user_id)).await;
-                if let Ok(user) = user {
+                if let Ok(user) = ctx.http.get_user(UserId::new(reminder.user_id)).await {
                     let _ = user
                         .dm(
                             &ctx.http,
@@ -189,6 +196,8 @@ pub async fn start_reminder_loop(ctx: serenity::all::Context) {
             }
 
             save_reminders(&future).await;
+
+            // Sleep for one second before checking again
             tokio::time::sleep(Duration::from_secs(1)).await;
         }
     });

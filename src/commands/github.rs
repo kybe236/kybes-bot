@@ -14,7 +14,6 @@ struct GitHubUser {
     followers: Option<u32>,
     avatar_url: Option<String>,
     html_url: Option<String>,
-
     name: Option<String>,
     company: Option<String>,
     blog: Option<String>,
@@ -24,6 +23,11 @@ struct GitHubUser {
     twitter_username: Option<String>,
     created_at: Option<String>,
     updated_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GitHubLicense {
+    name: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -48,9 +52,20 @@ struct GitHubRepo {
     owner: Option<GitHubUser>,
 }
 
-#[derive(Deserialize)]
-struct GitHubLicense {
-    name: Option<String>,
+// Updated to return the updated embed, because .field() consumes and returns new CreateEmbed
+fn add_field_if_some(
+    embed: CreateEmbed,
+    name: &str,
+    value: Option<impl ToString>,
+    inline: bool,
+) -> CreateEmbed {
+    if let Some(v) = value {
+        let v_str = v.to_string();
+        if !v_str.is_empty() {
+            return embed.field(name, v_str, inline);
+        }
+    }
+    embed
 }
 
 #[poise::command(slash_command)]
@@ -69,138 +84,107 @@ pub async fn github(
     };
 
     let client = reqwest::Client::new();
-    let res = match client
+    let res = client
         .get(&url)
         .header("User-Agent", "poise-bot")
         .send()
         .await
-    {
-        Ok(res) => res,
-        Err(e) => {
-            return error_and_return(&ctx, ephemeral, e).await;
-        }
-    };
+        .map_err(|e| {
+            tracing::error!("Request failed: {}", e);
+            e
+        })?;
 
-    if res.status().is_success() {
-        let embed = if is_repo {
-            let repo: GitHubRepo = match res.json().await {
-                Ok(repo) => repo,
-                Err(e) => {
-                    return error_and_return(&ctx, ephemeral, e).await;
-                }
-            };
-            let mut embed = CreateEmbed::default()
-                .title(repo.full_name.clone().unwrap_or_default())
-                .url(repo.html_url.clone().unwrap_or_default());
+    if !res.status().is_success() {
+        error_text(&ctx, ephemeral, "GitHub user or repository not found.").await;
+        return Ok(());
+    }
 
-            if let Some(desc) = &repo.description {
-                embed = embed.description(desc);
-            }
+    if is_repo {
+        let repo: GitHubRepo = match res.json().await {
+            Ok(repo) => repo,
+            Err(e) => return error_and_return(&ctx, ephemeral, e).await,
+        };
 
-            if let Some(stars) = repo.stargazers_count {
-                embed = embed.field("Stars", stars.to_string(), true);
-            }
-            if let Some(watchers) = repo.watchers_count {
-                embed = embed.field("Watchers", watchers.to_string(), true);
-            }
-            if let Some(forks) = repo.forks_count {
-                embed = embed.field("Forks", forks.to_string(), true);
-            }
-            if let Some(open_issues) = repo.open_issues_count {
-                embed = embed.field("Open Issues", open_issues.to_string(), true);
-            }
-            if let Some(language) = &repo.language {
-                embed = embed.field("Language", language, true);
-            }
-            if let Some(private) = repo.private {
-                embed = embed.field("Private", private.to_string(), true);
-            }
-            if let Some(fork) = repo.fork {
-                embed = embed.field("Forked Repo", fork.to_string(), true);
-            }
-            if let Some(homepage) = &repo.homepage {
-                if !homepage.is_empty() {
-                    embed = embed.field("Homepage", homepage, false);
-                }
-            }
-            if let Some(created) = &repo.created_at {
-                embed = embed.field("Created At", created, true);
-            }
-            if let Some(updated) = &repo.updated_at {
-                embed = embed.field("Last Updated", updated, true);
-            }
-            if let Some(pushed) = &repo.pushed_at {
-                embed = embed.field("Last Push", pushed, true);
-            }
-            if let Some(license) = &repo.license {
-                if let Some(name) = &license.name {
-                    embed = embed.field("📄 License", name, true);
-                }
-            }
-            if let Some(owner) = &repo.owner {
-                if let Some(avatar) = &owner.avatar_url {
-                    embed = embed.thumbnail(avatar.clone());
-                }
-            }
-            embed
-        } else {
-            let user: GitHubUser = match res.json().await {
-                Ok(user) => user,
-                Err(e) => {
-                    return error_and_return(&ctx, ephemeral, e).await;
-                }
-            };
+        let mut embed = CreateEmbed::default()
+            .title(repo.full_name.clone().unwrap_or_default())
+            .url(repo.html_url.clone().unwrap_or_default());
 
-            let mut embed = CreateEmbed::default()
-                .title(user.login.clone().unwrap_or_default())
-                .url(user.html_url.clone().unwrap_or_default());
-
-            if let Some(avatar) = &user.avatar_url {
+        if let Some(owner) = &repo.owner {
+            if let Some(avatar) = &owner.avatar_url {
                 embed = embed.thumbnail(avatar.clone());
             }
-            if let Some(public_repos) = user.public_repos {
-                embed = embed.field("Public Repos", public_repos.to_string(), true);
-            }
-            if let Some(followers) = user.followers {
-                embed = embed.field("Followers", followers.to_string(), true);
-            }
-            if let Some(name) = &user.name {
-                embed = embed.field("Name", name.clone(), true);
-            }
-            if let Some(company) = &user.company {
-                embed = embed.field("Company", company.clone(), true);
-            }
-            if let Some(blog) = &user.blog {
-                if !blog.is_empty() {
-                    embed = embed.field("Blog", blog.clone(), false);
-                }
-            }
-            if let Some(location) = &user.location {
-                embed = embed.field("Location", location.clone(), true);
-            }
-            if let Some(email) = &user.email {
-                embed = embed.field("Email", email.clone(), true);
-            }
-            if let Some(bio) = &user.bio {
-                embed = embed.description(bio.clone());
-            }
-            if let Some(twitter) = &user.twitter_username {
-                embed = embed.field("Twitter", format!("@{}", twitter), true);
-            }
-            if let Some(created) = &user.created_at {
-                embed = embed.field("Account Created", created.clone(), true);
-            }
-            if let Some(updated) = &user.updated_at {
-                embed = embed.field("Last Updated", updated.clone(), true);
-            }
+        }
 
-            embed
-        };
+        if let Some(desc) = &repo.description {
+            embed = embed.description(desc);
+        }
+
+        embed = add_field_if_some(embed, "Stars", repo.stargazers_count, true);
+        embed = add_field_if_some(embed, "Watchers", repo.watchers_count, true);
+        embed = add_field_if_some(embed, "Forks", repo.forks_count, true);
+        embed = add_field_if_some(embed, "Open Issues", repo.open_issues_count, true);
+        embed = add_field_if_some(embed, "Language", repo.language.clone(), true);
+        embed = add_field_if_some(embed, "Private", repo.private.map(|b| b.to_string()), true);
+        embed = add_field_if_some(embed, "Forked Repo", repo.fork.map(|b| b.to_string()), true);
+
+        if let Some(homepage) = &repo.homepage {
+            if !homepage.is_empty() {
+                embed = embed.field("Homepage", homepage, false);
+            }
+        }
+
+        embed = add_field_if_some(embed, "Created At", repo.created_at.clone(), true);
+        embed = add_field_if_some(embed, "Last Updated", repo.updated_at.clone(), true);
+        embed = add_field_if_some(embed, "Last Push", repo.pushed_at.clone(), true);
+
+        if let Some(license) = &repo.license {
+            embed = add_field_if_some(embed, "📄 License", license.name.clone(), true);
+        }
 
         ctx.send(CreateReply::default().embed(embed).ephemeral(ephemeral))
             .await?;
     } else {
-        error_text(&ctx, ephemeral, "GitHub user or repository not found.").await;
+        let user: GitHubUser = match res.json().await {
+            Ok(user) => user,
+            Err(e) => return error_and_return(&ctx, ephemeral, e).await,
+        };
+
+        let mut embed = CreateEmbed::default()
+            .title(user.login.clone().unwrap_or_default())
+            .url(user.html_url.clone().unwrap_or_default());
+
+        if let Some(avatar) = &user.avatar_url {
+            embed = embed.thumbnail(avatar.clone());
+        }
+
+        embed = add_field_if_some(embed, "Public Repos", user.public_repos, true);
+        embed = add_field_if_some(embed, "Followers", user.followers, true);
+        embed = add_field_if_some(embed, "Name", user.name.clone(), true);
+        embed = add_field_if_some(embed, "Company", user.company.clone(), true);
+
+        if let Some(blog) = &user.blog {
+            if !blog.is_empty() {
+                embed = embed.field("Blog", blog.clone(), false);
+            }
+        }
+
+        embed = add_field_if_some(embed, "Location", user.location.clone(), true);
+        embed = add_field_if_some(embed, "Email", user.email.clone(), true);
+
+        if let Some(bio) = &user.bio {
+            embed = embed.description(bio.clone());
+        }
+
+        if let Some(twitter) = &user.twitter_username {
+            embed = embed.field("Twitter", format!("@{}", twitter), true);
+        }
+
+        embed = add_field_if_some(embed, "Account Created", user.created_at.clone(), true);
+        embed = add_field_if_some(embed, "Last Updated", user.updated_at.clone(), true);
+
+        ctx.send(CreateReply::default().embed(embed).ephemeral(ephemeral))
+            .await?;
     }
+
     Ok(())
 }
